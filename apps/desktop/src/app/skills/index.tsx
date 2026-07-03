@@ -1,4 +1,5 @@
 import { useStore } from '@nanostores/react'
+import { useQuery } from '@tanstack/react-query'
 import type * as React from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -21,9 +22,11 @@ import {
 import { useI18n } from '@/i18n'
 import { isDesktopToolsetVisible } from '@/lib/desktop-toolsets'
 import { compactNumber } from '@/lib/format'
+import { queryClient, writeCache } from '@/lib/query-client'
 import { normalize } from '@/lib/text'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import type { SkillInfo, ToolsetInfo } from '@/types/hermes'
 
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
@@ -52,22 +55,38 @@ import { $skillsSortDesc, $toolsetsSortDesc } from './store'
 
 const SKILLS_MODES = ['skills', 'toolsets', 'mcp'] as const
 
+// Skills + toolsets live in the RQ cache so switching tabs/pages paints the
+// cached lists instantly (no reload flash) and mount only fires a deduped
+// background refetch. A profile swap globally invalidates (see store/profile),
+// so these plain keys refetch against the new backend automatically.
+const SKILLS_QUERY_KEY = ['skills-list'] as const
+const TOOLSETS_QUERY_KEY = ['toolsets-list'] as const
+
+// Optimistic write-through: toggles/bulk/archive repaint instantly; the next
+// background refetch reconciles with the backend.
+const setSkills = writeCache<SkillInfo[]>(SKILLS_QUERY_KEY)
+const setToolsets = writeCache<ToolsetInfo[]>(TOOLSETS_QUERY_KEY)
+
 // Per-tool call counts come from a 365-day message scan — heavy, and purely
 // cosmetic (Toolsets usage badges). Cache the result module-wide with a TTL so
-// bouncing between tabs/pages doesn't re-run the scan every time. Mirrors the
-// probeCache pattern in mcp-tab. `useRefreshHotkey` still forces a fresh pull.
+// bouncing between tabs/pages doesn't re-run the scan every time. Keyed by
+// profile: analytics are profile-scoped, so a switch must not show the previous
+// profile's counts. `useRefreshHotkey` still forces a fresh pull.
 const TOOL_CALLS_TTL_MS = 10 * 60 * 1000
-let toolCallsCache: { at: number; value: Record<string, number> } | null = null
+const toolCallsCache = new Map<string, { at: number; value: Record<string, number> }>()
 
 async function loadToolCalls(force = false): Promise<Record<string, number>> {
-  if (!force && toolCallsCache && Date.now() - toolCallsCache.at < TOOL_CALLS_TTL_MS) {
-    return toolCallsCache.value
+  const key = normalizeProfileKey($activeGatewayProfile.get())
+  const cached = toolCallsCache.get(key)
+
+  if (!force && cached && Date.now() - cached.at < TOOL_CALLS_TTL_MS) {
+    return cached.value
   }
 
   const analytics = await getUsageAnalytics(365)
 
   const value = Object.fromEntries((analytics.tools ?? []).map(e => [e.tool, e.count]))
-  toolCallsCache = { at: Date.now(), value }
+  toolCallsCache.set(key, { at: Date.now(), value })
 
   return value
 }
@@ -165,8 +184,23 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   const [mode, setMode] = useRouteEnumParam('tab', SKILLS_MODES, 'skills')
 
   const [query, setQuery] = useState('')
-  const [skills, setSkills] = useState<SkillInfo[] | null>(null)
-  const [toolsets, setToolsets] = useState<ToolsetInfo[] | null>(null)
+
+  const {
+    data: skills,
+    isError: skillsFailed,
+    error: skillsError
+  } = useQuery({
+    queryKey: SKILLS_QUERY_KEY,
+    queryFn: getSkills,
+    staleTime: 0
+  })
+
+  const { data: toolsets, isError: toolsetsFailed } = useQuery({
+    queryKey: TOOLSETS_QUERY_KEY,
+    queryFn: getToolsets,
+    staleTime: 0
+  })
+
   // tool name -> call count over the analytics window. null = still loading
   // (badges show skeletons); {} = loaded empty / unavailable backend.
   const [toolCalls, setToolCalls] = useState<Record<string, number> | null>(null)
@@ -177,35 +211,26 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   const [selectedToolset, setSelectedToolset] = useState<string | null>(null)
 
   const refreshCapabilities = useCallback(async () => {
-    try {
-      const [nextSkills, nextToolsets] = await Promise.all([getSkills(), getToolsets()])
-      setSkills(nextSkills)
-      setToolsets(nextToolsets)
-    } catch (err) {
-      notifyError(err, t.skills.skillsLoadFailed)
-    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: SKILLS_QUERY_KEY }),
+      queryClient.invalidateQueries({ queryKey: TOOLSETS_QUERY_KEY })
+    ])
 
     // An explicit refresh is the one time we bypass the analytics TTL — but
     // only if the badges are already on screen; otherwise let the lazy load
     // pick it up when Toolsets is first shown.
-    if (toolCallsCache) {
+    if (toolCallsCache.size > 0) {
       loadToolCalls(true)
         .then(setToolCalls)
         .catch(() => setToolCalls({}))
     }
-  }, [t])
+  }, [])
 
   const refreshToolsets = useCallback(() => {
-    getToolsets()
-      .then(setToolsets)
-      .catch(err => notifyError(err, t.skills.toolsetsRefreshFailed))
-  }, [t])
+    void queryClient.invalidateQueries({ queryKey: TOOLSETS_QUERY_KEY })
+  }, [])
 
   useRefreshHotkey(refreshCapabilities)
-
-  useEffect(() => {
-    void refreshCapabilities()
-  }, [refreshCapabilities])
 
   // Per-tool call counts feed ONLY the Toolsets tab's usage badges/sort, and
   // the query behind them is a 365-day message scan — heavy. Fetch it lazily
@@ -461,6 +486,17 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     >
       {mode === 'mcp' ? (
         <McpTab gateway={gateway} />
+      ) : (skillsFailed || toolsetsFailed) && (!skills || !toolsets) ? (
+        <PanelEmpty
+          action={
+            <Button onClick={() => void refreshCapabilities()} size="sm">
+              {t.skills.refresh}
+            </Button>
+          }
+          description={skillsError instanceof Error ? skillsError.message : undefined}
+          icon="error"
+          title={t.skills.skillsLoadFailed}
+        />
       ) : !skills || !toolsets ? (
         <PageLoader label={t.skills.loading} />
       ) : mode === 'skills' ? (
@@ -584,15 +620,27 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   )
 }
 
-// Shared inspector header, on the Messaging detail's type scale. No toggle —
-// the selected row's switch is right there in the list; showing it twice
-// invites drift. `pills` sit inline with the title, never on their own line.
-function DetailHeader({ title, pills }: { title: string; pills?: React.ReactNode }) {
+// Shared inspector header — mirrors Messaging's PlatformDetail so Skills and
+// Tools share one title/description block and tab switches don't jump.
+function DetailHeader({
+  description,
+  pills,
+  title
+}: {
+  description: React.ReactNode
+  pills?: React.ReactNode
+  title: string
+}) {
   return (
-    <div className="flex items-center gap-2">
-      <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold tracking-tight">{title}</h3>
-      {pills}
-    </div>
+    <header>
+      <div className="flex min-h-6 flex-wrap items-center gap-2">
+        <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold tracking-tight">{title}</h3>
+        {pills}
+      </div>
+      <p className="mt-1 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
+        {description}
+      </p>
+    </header>
   )
 }
 
@@ -605,6 +653,7 @@ function SkillDetail({ onArchive, onEdit, skill }: { onArchive: () => void; onEd
   return (
     <>
       <DetailHeader
+        description={asText(skill.description) || t.skills.noDescription}
         pills={
           <>
             <PanelPill>{prettyName(categoryFor(skill))}</PanelPill>
@@ -617,9 +666,6 @@ function SkillDetail({ onArchive, onEdit, skill }: { onArchive: () => void; onEd
         }
         title={skill.name}
       />
-      <p className="text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
-        {asText(skill.description) || t.skills.noDescription}
-      </p>
       {editable && (
         <div className="flex items-center gap-2">
           {/* TODO(i18n): literals until the UX settles. */}
@@ -652,12 +698,10 @@ function ToolsetDetail({
     <>
       {/* "Configured" as a resting state is noise — only the warn state earns a pill. */}
       <DetailHeader
+        description={asText(toolset.description) || t.skills.noDescription}
         pills={!toolset.configured && <PanelPill tone="warn">{t.skills.needsKeys}</PanelPill>}
         title={label}
       />
-      <p className="text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
-        {asText(toolset.description) || t.skills.noDescription}
-      </p>
       {tools.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {tools.map(name => (
