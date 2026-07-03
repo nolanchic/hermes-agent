@@ -41,6 +41,7 @@ import { $activeSessionId } from '@/store/session'
 import type { HermesConfigRecord } from '@/types/hermes'
 
 import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record'
+import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { DetailPane, ICON_BUTTON, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
 import { PanelAddButton, PanelEmpty } from '../overlays/panel'
 import { prettyName } from '../settings/helpers'
@@ -434,20 +435,11 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
   // refetches the new backend's mcp.json. Reset per-profile view state so the
   // draft reseeds for the new profile and the old profile's probes don't linger
   // (the probe cache is already profile-keyed, so this just forces a re-probe).
-  const activeProfile = useStore($activeGatewayProfile)
-  const firstProfileRender = useRef(true)
-
-  useEffect(() => {
-    if (firstProfileRender.current) {
-      firstProfileRender.current = false
-
-      return
-    }
-
+  useOnProfileSwitch(() => {
     draftSeeded.current = false
     setProbes({})
     setCursor(0)
-  }, [activeProfile])
+  })
 
   useDeepLinkHighlight({
     block: 'nearest',
@@ -494,7 +486,13 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
         const nextServers = { ...servers, [serverName]: { ...servers[serverName], auth: 'oauth' } }
         setConfig(current => (current ? { ...current, mcp_servers: nextServers } : current))
 
-        if (!dirty) {
+        // Mirror `auth: oauth` into the editor too. If we only reset a clean
+        // draft, a dirty draft keeps the pre-auth text and the next Save would
+        // drop the freshly-persisted auth field — so patch the dirty draft in
+        // place instead of clobbering the user's other edits.
+        if (dirty) {
+          patchDraft(doc => (doc[serverName] ? { ...doc, [serverName]: { ...doc[serverName], auth: 'oauth' } } : doc))
+        } else {
           resetDraft(nextServers)
         }
 
@@ -886,8 +884,18 @@ function ServerConfig({
   const m = t.settings.mcp
   const status = statusOf(entry, probe)
 
+  // OAuth is only offered to servers that are actually OAuth-shaped. A server
+  // with `headers` uses API-key/bearer auth — a 401 there means a bad key, NOT
+  // "log in with OAuth"; routing it through the browser flow would wrongly
+  // rewrite its config to `auth: oauth`. So: explicit `auth: oauth` can re-auth
+  // on failure; an auth-less HTTP server may try OAuth on a 401; header servers
+  // never do.
+  const hasHeaderAuth = !!entry.headers && typeof entry.headers === 'object'
+
   const canAuth =
-    typeof entry.url === 'string' && (status === 'needs-auth' || (entry.auth === 'oauth' && status === 'error'))
+    typeof entry.url === 'string' &&
+    !hasHeaderAuth &&
+    (entry.auth === 'oauth' ? status === 'needs-auth' || status === 'error' : !entry.auth && status === 'needs-auth')
 
   const summary = probe && probe !== 'probing' && probe.ok ? capabilitySummary(probe) : null
 
@@ -936,7 +944,6 @@ function ServerConfig({
               enabled={serverEnabled(entry)}
               name={name}
               onToggle={onToggle}
-              status={status}
             />
           </>
         )}
@@ -980,35 +987,29 @@ function ServerConfig({
   )
 }
 
-// The enable toggle, shared by the row and the config header so the "enabled ≠
-// working" rule lives in one place: the switch only earns its accent color once
-// the server actually connects (status 'ok'). Connecting/error/needs-auth read
-// as a desaturated "on" — intent without success.
+// The enable toggle, shared by the row and the config header. It reflects the
+// configured `enabled` flag ONLY — full-strength when on, dimmed when off — so
+// "is this on?" reads instantly from config, never gated on a probe that can
+// take seconds (stdio servers spawn `npx`). Whether it's actually *connected*
+// is the status dot's job, not the switch's.
 function ServerSwitch({
   className,
   disabled,
   enabled,
   name,
-  onToggle,
-  status
+  onToggle
 }: {
   className?: string
   disabled: boolean
   enabled: boolean
   name: string
   onToggle: (checked: boolean) => void
-  status: ServerStatus
 }) {
   return (
     <Switch
       aria-label={name}
       checked={enabled}
-      className={cn(
-        'shrink-0 cursor-pointer',
-        !enabled && 'opacity-60',
-        enabled && status !== 'ok' && 'opacity-70 saturate-0',
-        className
-      )}
+      className={cn('shrink-0 cursor-pointer', !enabled && 'opacity-60', className)}
       disabled={disabled}
       onCheckedChange={onToggle}
       size="xs"
@@ -1289,7 +1290,7 @@ function McpRow({
         probing={status === 'probing'}
         saving={busy}
       />
-      <ServerSwitch disabled={busy} enabled={enabled} name={name} onToggle={onToggle} status={status} />
+      <ServerSwitch disabled={busy} enabled={enabled} name={name} onToggle={onToggle} />
     </div>
   )
 }
