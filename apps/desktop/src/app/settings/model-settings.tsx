@@ -8,7 +8,6 @@ import {
   getAuxiliaryModels,
   getGlobalModelInfo,
   getGlobalModelOptions,
-  getHermesConfigRecord,
   getMoaModels,
   getRecommendedDefaultModel,
   saveHermesConfig,
@@ -28,7 +27,8 @@ import { AlertTriangle, Cpu, Loader2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { notifyError } from '@/store/notifications'
 import { startManualLocalEndpoint, startManualProviderOAuth } from '@/store/onboarding'
-import type { HermesConfigRecord } from '@/types/hermes'
+
+import { invalidateHermesConfig, setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record'
 
 import { CONTROL_TEXT } from './constants'
 import { getNested, setNested } from './helpers'
@@ -136,9 +136,10 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
   const [moa, setMoa] = useState<MoaConfigResponse | null>(null)
   const [selectedMoaPreset, setSelectedMoaPreset] = useState('')
   const [newMoaPresetName, setNewMoaPresetName] = useState('')
-  // Full profile config, kept so the reasoning/speed defaults round-trip
-  // (read agent.* → write back the whole record) like the generic config page.
-  const [config, setConfig] = useState<HermesConfigRecord | null>(null)
+  // agent.* defaults round-trip through the shared config cache (read → write
+  // back the whole record), so a save here shows in the MCP/config surfaces.
+  const { data: config } = useHermesConfigRecord()
+  const setConfig = setHermesConfigCache
   const [applying, setApplying] = useState(false)
   const [editingAuxTask, setEditingAuxTask] = useState<null | string>(null)
   const [auxDraft, setAuxDraft] = useState<{ model: string; provider: string }>({ model: '', provider: '' })
@@ -155,12 +156,11 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
     setError('')
 
     try {
-      const [modelInfo, modelOptions, auxiliaryModels, moaModels, cfg] = await Promise.all([
+      const [modelInfo, modelOptions, auxiliaryModels, moaModels] = await Promise.all([
         getGlobalModelInfo(),
         getGlobalModelOptions(),
         getAuxiliaryModels(),
-        getMoaModels().catch(() => null),
-        getHermesConfigRecord()
+        getMoaModels().catch(() => null)
       ])
 
       setMainModel({ model: modelInfo.model, provider: modelInfo.provider })
@@ -174,7 +174,9 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
         setSelectedMoaPreset(prev => (prev && moaModels.presets[prev] ? prev : moaModels.default_preset))
       }
 
-      setConfig(cfg)
+      // The config record loads via its own shared query; a model switch can
+      // change it server-side (aux slots), so nudge that cache to refetch.
+      void invalidateHermesConfig()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

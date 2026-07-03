@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -513,7 +512,15 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange }: ToolsetConfi
   }
 
   if (loading) {
-    return <PageLoader className="min-h-32" label={copy.loadingConfig} />
+    // Inline row, not a full block loader — a big centered spinner is what
+    // caused the Skills/Tools tab-switch layout jump; this reads as "more
+    // config incoming" without reserving a tall empty area.
+    return (
+      <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" />
+        {copy.loadingConfig}
+      </div>
+    )
   }
 
   // Nothing to configure → render nothing. An inspector explaining that there
@@ -528,7 +535,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange }: ToolsetConfi
   }
 
   return (
-    <div className="mt-3 grid gap-2">
+    <div className="grid gap-2">
       {providers.map(provider => {
         const isActive = activeProvider === provider.name
         const configured = providerConfigured(provider, envState)
