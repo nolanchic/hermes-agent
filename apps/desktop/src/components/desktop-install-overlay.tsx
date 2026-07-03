@@ -145,11 +145,7 @@ function StageRow({ descriptor, result, now }: StageRowProps) {
         {reason && state !== 'pending' && <p className="mt-0.5 truncate text-xs text-muted-foreground">{reason}</p>}
       </div>
       <span className="flex-shrink-0 text-xs tabular-nums text-muted-foreground">
-        {state === 'running'
-          ? elapsed
-            ? `${copy.stageStates[state]} · ${elapsed}`
-            : copy.stageStates[state]
-          : null}
+        {state === 'running' ? (elapsed ? `${copy.stageStates[state]} · ${elapsed}` : copy.stageStates[state]) : null}
         {state === 'succeeded' || state === 'skipped' ? formatDuration(result?.durationMs) : null}
         {state === 'failed' ? copy.stageStates[state] : null}
       </span>

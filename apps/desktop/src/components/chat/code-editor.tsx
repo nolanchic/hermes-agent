@@ -262,7 +262,11 @@ export function CodeEditor({
             onCursorChangeRef.current?.(update.state.selection.main.head)
           }
         }),
-        LAYOUT_THEME
+        LAYOUT_THEME,
+        // Standalone edits (SOUL.md, skills, memories) are prose, not code —
+        // wrap long lines instead of scrolling horizontally. Pane previews stay
+        // flush/scrolling so they mirror the SourceView they toggle from.
+        ...(framed ? [EditorView.lineWrapping] : [])
       ]
     })
 
