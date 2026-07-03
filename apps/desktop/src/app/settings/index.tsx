@@ -19,7 +19,6 @@ import { ConfigSettings } from './config-settings'
 import { SECTIONS } from './constants'
 import { GatewaySettings } from './gateway-settings'
 import { KEYS_VIEWS, KeysSettings, type KeysView } from './keys-settings'
-import { McpSettings } from './mcp-settings'
 import { NotificationsSettings } from './notifications-settings'
 import { PROVIDER_VIEWS, ProvidersSettings, type ProviderView } from './providers-settings'
 import { SessionsSettings } from './sessions-settings'
@@ -30,13 +29,12 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
   'providers',
   'gateway',
   'keys',
-  'mcp',
   'notifications',
   'sessions',
   'about'
 ]
 
-export function SettingsView({ gateway, onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
+export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
   const { t } = useI18n()
   const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
   // Providers subnav (Accounts vs API keys) lives in its own param so each
@@ -109,7 +107,7 @@ export function SettingsView({ gateway, onClose, onConfigSaved, onMainModelChang
             label={t.settings.nav.notifications}
             onClick={() => setActiveView('notifications')}
           />
-          <div className="my-2 h-px bg-border/30" />
+          <div aria-hidden className="h-2" />
           <OverlayNavItem
             active={activeView === 'providers'}
             icon={Zap}
@@ -165,18 +163,12 @@ export function SettingsView({ gateway, onClose, onConfigSaved, onMainModelChang
             </div>
           )}
           <OverlayNavItem
-            active={activeView === 'mcp'}
-            icon={Wrench}
-            label={t.settings.nav.mcp}
-            onClick={() => setActiveView('mcp')}
-          />
-          <OverlayNavItem
             active={activeView === 'sessions'}
             icon={Archive}
             label={t.settings.nav.archivedChats}
             onClick={() => setActiveView('sessions')}
           />
-          <div className="my-2 h-px bg-border/30" />
+          <div aria-hidden className="h-2" />
           <OverlayNavItem
             active={activeView === 'about'}
             icon={Info}
@@ -231,8 +223,6 @@ export function SettingsView({ gateway, onClose, onConfigSaved, onMainModelChang
             <ProvidersSettings onClose={onClose} onViewChange={setProviderView} view={providerView} />
           ) : activeView === 'keys' ? (
             <KeysSettings view={keysView} />
-          ) : activeView === 'mcp' ? (
-            <McpSettings gateway={gateway} onConfigSaved={onConfigSaved} />
           ) : activeView === 'notifications' ? (
             <NotificationsSettings />
           ) : (

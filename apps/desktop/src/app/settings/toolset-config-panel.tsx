@@ -512,28 +512,19 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange }: ToolsetConfi
     onConfiguredChange?.()
   }
 
-  const emptyMessage = useMemo(() => {
-    if (loading || !cfg) {
-      return null
-    }
-
-    if (!cfg.has_category) {
-      return copy.noProviderOptions
-    }
-
-    if (providers.length === 0) {
-      return copy.noProviders
-    }
-
-    return null
-  }, [cfg, copy, loading, providers.length])
-
   if (loading) {
     return <PageLoader className="min-h-32" label={copy.loadingConfig} />
   }
 
-  if (emptyMessage) {
-    return <p className="px-1 py-3 text-xs text-muted-foreground">{emptyMessage}</p>
+  // Nothing to configure → render nothing. An inspector explaining that there
+  // is nothing to explain is noise (the old expander UX needed the message so
+  // an expanded-empty panel didn't look broken; the always-open detail doesn't).
+  if (!cfg || !cfg.has_category) {
+    return null
+  }
+
+  if (providers.length === 0) {
+    return <p className="px-1 py-3 text-xs text-muted-foreground">{copy.noProviders}</p>
   }
 
   return (

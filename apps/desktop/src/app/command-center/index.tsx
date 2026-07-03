@@ -9,6 +9,7 @@ import { getActionStatus, getLogs, getStatus, getUsageAnalytics, restartGateway,
 import type { ActionStatusResponse, AnalyticsResponse, StatusResponse } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { sessionTitle } from '@/lib/chat-runtime'
+import { compactNumber } from '@/lib/format'
 import {
   Activity,
   AlertCircle,
@@ -21,6 +22,7 @@ import {
   Wrench
 } from '@/lib/icons'
 import { exportSession } from '@/lib/session-export'
+import { fmtDateTime } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { upsertDesktopActionTask } from '@/store/activity'
 import { $pinnedSessionIds, pinSession, unpinSession } from '@/store/layout'
@@ -63,7 +65,7 @@ function formatTimestamp(value?: number | null): string {
     return ''
   }
 
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return fmtDateTime.format(date)
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -496,24 +498,6 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
   )
 }
 
-function formatTokens(value: null | number | undefined): string {
-  const num = Number(value || 0)
-
-  if (num >= 1_000_000) {
-    return `${(num / 1_000_000).toFixed(1)}M`
-  }
-
-  if (num >= 1_000) {
-    return `${(num / 1_000).toFixed(1)}K`
-  }
-
-  return num.toLocaleString()
-}
-
-function formatInteger(value: null | number | undefined): string {
-  return Number(value ?? 0).toLocaleString()
-}
-
 interface UsagePanelProps {
   error: string
   loading: boolean
@@ -567,11 +551,11 @@ function UsagePanel({ error, loading, onRefresh, period, usage }: UsagePanelProp
       )}
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-4 py-2 sm:grid-cols-3">
-        <UsageStat label={cc.statSessions} value={formatInteger(totals.total_sessions)} />
-        <UsageStat label={cc.statApiCalls} value={formatInteger(totals.total_api_calls)} />
+        <UsageStat label={cc.statSessions} value={compactNumber(totals.total_sessions)} />
+        <UsageStat label={cc.statApiCalls} value={compactNumber(totals.total_api_calls)} />
         <UsageStat
           label={cc.statTokens}
-          value={`${formatTokens(totals.total_input)} / ${formatTokens(totals.total_output)}`}
+          value={`${compactNumber(totals.total_input)} / ${compactNumber(totals.total_output)}`}
         />
       </div>
 
@@ -604,7 +588,7 @@ function UsagePanel({ error, loading, onRefresh, period, usage }: UsagePanelProp
                   <div
                     className="group relative flex h-24 min-w-0 flex-1 flex-col justify-end"
                     key={entry.day}
-                    title={`${entry.day} · in ${formatTokens(entry.input_tokens)} · out ${formatTokens(entry.output_tokens)}`}
+                    title={`${entry.day} · in ${compactNumber(entry.input_tokens)} · out ${compactNumber(entry.output_tokens)}`}
                   >
                     <div
                       className="w-full rounded-t-[1px] bg-[color:var(--dt-primary)]/50"
@@ -632,7 +616,7 @@ function UsagePanel({ error, loading, onRefresh, period, usage }: UsagePanelProp
           rows={byModel.slice(0, 6).map(entry => ({
             key: entry.model,
             label: entry.model,
-            value: `${formatTokens((entry.input_tokens || 0) + (entry.output_tokens || 0))}`
+            value: `${compactNumber((entry.input_tokens || 0) + (entry.output_tokens || 0))}`
           }))}
           title={cc.topModels}
         />
@@ -641,7 +625,7 @@ function UsagePanel({ error, loading, onRefresh, period, usage }: UsagePanelProp
           rows={topSkills.slice(0, 6).map(entry => ({
             key: entry.skill,
             label: entry.skill,
-            value: cc.actions(entry.total_count.toLocaleString())
+            value: cc.actions(compactNumber(entry.total_count))
           }))}
           title={cc.topSkills}
         />
