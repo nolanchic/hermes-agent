@@ -40,7 +40,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $activeSessionId } from '@/store/session'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { DetailPane, ICON_BUTTON, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
+import { DetailPane, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
 import { PanelAddButton, PanelEmpty } from '../overlays/panel'
 import { prettyName } from '../settings/helpers'
 import { useDeepLinkHighlight } from '../settings/use-deep-link-highlight'
@@ -830,7 +830,7 @@ function ServerConfig({
         <Button
           // TODO(i18n): literal until the UX settles.
           aria-label="All servers"
-          className={cn('mt-3', ICON_BUTTON)}
+          className={cn('mt-3', 'icon-button')}
           onClick={onBack}
           size="icon"
           title="All servers"
@@ -857,17 +857,13 @@ function ServerConfig({
               probing={probe === 'probing'}
               saving={saving}
             />
-            <Switch
-              aria-label={name}
-              checked={serverEnabled(entry)}
-              className={cn(
-                'mt-3.5 shrink-0 cursor-pointer',
-                !serverEnabled(entry) && 'opacity-60',
-                serverEnabled(entry) && status !== 'ok' && 'opacity-70 saturate-0'
-              )}
+            <ServerSwitch
+              className="mt-3.5"
               disabled={saving}
-              onCheckedChange={onToggle}
-              size="xs"
+              enabled={serverEnabled(entry)}
+              name={name}
+              onToggle={onToggle}
+              status={status}
             />
           </>
         )}
@@ -911,6 +907,43 @@ function ServerConfig({
   )
 }
 
+// The enable toggle, shared by the row and the config header so the "enabled ≠
+// working" rule lives in one place: the switch only earns its accent color once
+// the server actually connects (status 'ok'). Connecting/error/needs-auth read
+// as a desaturated "on" — intent without success.
+function ServerSwitch({
+  className,
+  disabled,
+  enabled,
+  name,
+  onToggle,
+  status
+}: {
+  className?: string
+  disabled: boolean
+  enabled: boolean
+  name: string
+  onToggle: (checked: boolean) => void
+  status: ServerStatus
+}) {
+  return (
+    <Switch
+      aria-label={name}
+      checked={enabled}
+      className={cn(
+        'shrink-0 cursor-pointer',
+        !enabled && 'opacity-60',
+        enabled && status !== 'ok' && 'opacity-70 saturate-0',
+        className
+      )}
+      disabled={disabled}
+      onCheckedChange={onToggle}
+      size="xs"
+      title={name}
+    />
+  )
+}
+
 // Refresh + delete, identical beside every toggle (rows and config header).
 function ServerIconActions({
   className,
@@ -932,7 +965,7 @@ function ServerIconActions({
     <span className={cn('flex items-center gap-0.5', className)}>
       <Button
         aria-label={m.reload}
-        className={ICON_BUTTON}
+        className="icon-button"
         disabled={probing}
         onClick={onProbe}
         size="icon"
@@ -943,7 +976,7 @@ function ServerIconActions({
       </Button>
       <Button
         aria-label={m.remove}
-        className={cn(ICON_BUTTON, 'hover:text-destructive')}
+        className={cn('icon-button', 'hover:text-destructive')}
         disabled={saving}
         onClick={onRemove}
         size="icon"
@@ -1218,22 +1251,7 @@ function McpRow({
         probing={status === 'probing'}
         saving={busy}
       />
-      <Switch
-        aria-label={name}
-        checked={enabled}
-        className={cn(
-          'shrink-0 cursor-pointer',
-          !enabled && 'opacity-60',
-          // Enabled ≠ working: the switch only earns its accent color once the
-          // server actually connects. Connecting/error/needs-auth read as a
-          // desaturated "on" — intent without success.
-          enabled && status !== 'ok' && 'opacity-70 saturate-0'
-        )}
-        disabled={busy}
-        onCheckedChange={onToggle}
-        size="xs"
-        title={name}
-      />
+      <ServerSwitch disabled={busy} enabled={enabled} name={name} onToggle={onToggle} status={status} />
     </div>
   )
 }

@@ -8,9 +8,6 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
-const ICON_BUTTON =
-  'size-5 cursor-pointer rounded-[4px] text-muted-foreground/70 hover:bg-(--ui-control-active-background) hover:text-foreground'
-
 interface JsonDocumentEditorProps {
   apiRef?: RefObject<CodeEditorApi | null>
   className?: string
@@ -57,7 +54,7 @@ export function JsonDocumentEditor({
           <Tip label={t.common.formatJson}>
             <Button
               aria-label={t.common.formatJson}
-              className={ICON_BUTTON}
+              className="icon-button"
               disabled={disabled}
               onClick={() => {
                 const result = editorApi.current?.formatJson()

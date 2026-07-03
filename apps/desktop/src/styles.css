@@ -567,6 +567,24 @@
   }
 }
 
+/* Ghost icon-button on the kebab-trigger scale — shared by pane headers, the
+   list-strip menu, per-server MCP actions, and the JSON editor's format button.
+   Mirrors row-hover: one definition, referenced by class name (no TS const to
+   copy). Compose extra state (data-[state=open], hover:text-destructive) with
+   cn() as usual. Values match the utilities it replaced 1:1. */
+@utility icon-button {
+  width: 1.25rem;
+  height: 1.25rem;
+  cursor: pointer;
+  border-radius: 4px;
+  color: color-mix(in oklab, var(--color-muted-foreground) 70%, transparent);
+
+  &:hover {
+    background-color: var(--ui-control-active-background);
+    color: var(--color-foreground);
+  }
+}
+
 @keyframes arc-border {
   0% {
     background-position: 15% 15%;
