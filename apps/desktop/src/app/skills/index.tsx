@@ -37,7 +37,8 @@ import {
   ListStripButton,
   ListStripMenu,
   type ListStripMenuToggle,
-  MasterDetail
+  MasterDetail,
+  ToolChip
 } from '../master-detail'
 import { PanelEmpty, PanelPill } from '../overlays/panel'
 import { PageSearchShell } from '../page-search-shell'
@@ -624,15 +625,12 @@ function ToolsetDetail({
       {tools.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {tools.map(name => (
-            <span
-              className="rounded-md bg-(--ui-bg-quinary) px-1.5 py-0.5 font-mono text-[0.65rem] text-(--ui-text-tertiary)"
-              key={name}
-            >
+            <ToolChip key={name}>
               {name}
               {(toolCalls[name] ?? 0) > 0 && (
                 <span className="ml-1 text-(--ui-text-quaternary)">×{compactNumber(toolCalls[name])}</span>
               )}
-            </span>
+            </ToolChip>
           ))}
         </div>
       )}

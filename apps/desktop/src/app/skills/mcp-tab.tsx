@@ -40,7 +40,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $activeSessionId } from '@/store/session'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { DetailPane, MASTER_DETAIL_WIDE_COLS } from '../master-detail'
+import { DetailPane, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
 import { PanelAddButton, PanelEmpty } from '../overlays/panel'
 import { prettyName } from '../settings/helpers'
 import { useDeepLinkHighlight } from '../settings/use-deep-link-highlight'
@@ -901,13 +901,9 @@ function ServerConfig({
       {probe && probe !== 'probing' && probe.ok && probe.tools.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1">
           {probe.tools.map(tool => (
-            <span
-              className="rounded-md bg-(--ui-bg-quinary) px-1.5 py-0.5 font-mono text-[0.65rem] text-(--ui-text-tertiary)"
-              key={tool.name}
-              title={tool.description}
-            >
+            <ToolChip key={tool.name} title={tool.description}>
               {tool.name}
-            </span>
+            </ToolChip>
           ))}
         </div>
       )}

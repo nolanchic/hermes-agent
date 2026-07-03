@@ -9,6 +9,19 @@ import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
 
+// Monospace capability chip (tool name, transport, …). Shared by the Skills
+// and MCP tabs so the pill reads identically everywhere.
+export function ToolChip({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span
+      className="rounded-md bg-(--ui-bg-quinary) px-1.5 py-0.5 font-mono text-[0.65rem] text-(--ui-text-tertiary)"
+      title={title}
+    >
+      {children}
+    </span>
+  )
+}
+
 // Master–detail page scaffolding (14rem rail, p-2, centered max-w-2xl detail):
 // dense uniform rows on the left, roomy inspector on the right. Shared by the
 // Capabilities and Messaging pages — pages bring their own row/detail content
