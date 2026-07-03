@@ -40,7 +40,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $activeSessionId } from '@/store/session'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { DetailPane, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
+import { DetailPane, ICON_BUTTON, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
 import { PanelAddButton, PanelEmpty } from '../overlays/panel'
 import { prettyName } from '../settings/helpers'
 import { useDeepLinkHighlight } from '../settings/use-deep-link-highlight'
@@ -830,7 +830,7 @@ function ServerConfig({
         <Button
           // TODO(i18n): literal until the UX settles.
           aria-label="All servers"
-          className={cn('mt-3', ACTION_ICON_BUTTON)}
+          className={cn('mt-3', ICON_BUTTON)}
           onClick={onBack}
           size="icon"
           title="All servers"
@@ -911,9 +911,6 @@ function ServerConfig({
   )
 }
 
-const ACTION_ICON_BUTTON =
-  'size-5 cursor-pointer rounded-[4px] text-muted-foreground/70 hover:bg-(--ui-control-active-background) hover:text-foreground'
-
 // Refresh + delete, identical beside every toggle (rows and config header).
 function ServerIconActions({
   className,
@@ -935,7 +932,7 @@ function ServerIconActions({
     <span className={cn('flex items-center gap-0.5', className)}>
       <Button
         aria-label={m.reload}
-        className={ACTION_ICON_BUTTON}
+        className={ICON_BUTTON}
         disabled={probing}
         onClick={onProbe}
         size="icon"
@@ -946,7 +943,7 @@ function ServerIconActions({
       </Button>
       <Button
         aria-label={m.remove}
-        className={cn(ACTION_ICON_BUTTON, 'hover:text-destructive')}
+        className={cn(ICON_BUTTON, 'hover:text-destructive')}
         disabled={saving}
         onClick={onRemove}
         size="icon"

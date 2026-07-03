@@ -110,8 +110,9 @@ const DETAIL_PANE_DEFAULT_BODY_PX = 288
 const DETAIL_PANE_MAX_VH = 0.7
 const DETAIL_PANE_COLLAPSED_PX = 4
 
-// Header icon buttons on the kebab trigger's scale (PanelRowMenu / ListStripMenu).
-const PANE_ICON_BUTTON =
+// Ghost icon-button on the kebab-trigger scale (pane headers, list-strip menu,
+// per-server actions). One definition; compose with cn() for extra state.
+export const ICON_BUTTON =
   'size-5 cursor-pointer rounded-[4px] text-muted-foreground/70 hover:bg-(--ui-control-active-background) hover:text-foreground'
 
 export function DetailPane({
@@ -181,7 +182,7 @@ export function DetailPane({
             aria-expanded={!collapsed}
             // TODO(i18n): literals until the UX settles.
             aria-label={collapsed ? 'Expand' : 'Collapse'}
-            className={PANE_ICON_BUTTON}
+            className={ICON_BUTTON}
             onClick={() => setPaneHeightOverride(id, collapsed ? undefined : 0)}
             size="icon"
             variant="ghost"
@@ -190,7 +191,7 @@ export function DetailPane({
           </Button>
           {onClose && (
             // TODO(i18n): literal until the UX settles.
-            <Button aria-label="Close" className={PANE_ICON_BUTTON} onClick={onClose} size="icon" variant="ghost">
+            <Button aria-label="Close" className={ICON_BUTTON} onClick={onClose} size="icon" variant="ghost">
               <Codicon name="close" size="0.8125rem" />
             </Button>
           )}
@@ -244,7 +245,10 @@ export function ListStripMenu({
       <DropdownMenuTrigger asChild>
         <Button
           aria-label={label}
-          className="size-5 cursor-pointer rounded-[4px] text-muted-foreground/70 hover:bg-(--ui-control-active-background) hover:text-foreground data-[state=open]:bg-(--ui-control-active-background) data-[state=open]:text-foreground"
+          className={cn(
+            ICON_BUTTON,
+            'data-[state=open]:bg-(--ui-control-active-background) data-[state=open]:text-foreground'
+          )}
           size="icon"
           title={label}
           variant="ghost"
