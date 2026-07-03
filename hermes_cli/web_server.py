@@ -8911,6 +8911,8 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
     if name not in servers:
         raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
 
+    details: Dict[str, Any] = {}
+
     def _probe_scoped():
         # Re-enter the scope INSIDE the worker thread so call-time
         # resolution during the probe — env-placeholder expansion in
@@ -8923,7 +8925,7 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
         # HERMES_HOME override (see mcp_tool._wrap_with_home_override), so
         # OAuth token stores resolve against the selected profile as well.
         with _profile_scope(profile):
-            return _probe_single_server(name, servers[name])
+            return _probe_single_server(name, servers[name], details=details)
 
     try:
         # Probe blocks on a dedicated MCP event loop — run in a thread so the
@@ -8938,7 +8940,89 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
     return {
         "ok": True,
         "tools": [{"name": t, "description": d} for t, d in tools],
+        "prompts": details.get("prompts", 0),
+        "resources": details.get("resources", 0),
     }
+
+
+@app.post("/api/mcp/servers/{name}/auth")
+async def auth_mcp_server(name: str, profile: Optional[str] = None):
+    """Run the OAuth flow for an HTTP MCP server (opens the system browser).
+
+    Mirrors ``hermes mcp login``: wipe cached OAuth state so the probe forces
+    a fresh browser flow, connect, then verify a token actually landed on disk
+    (some providers serve tools/list unauthenticated — see
+    ``_reauth_oauth_server``).  Blocks until the browser flow completes, so it
+    runs in a worker thread.  ``auth: oauth`` is persisted only on success.
+    """
+    from hermes_cli.mcp_config import (
+        _get_mcp_servers,
+        _oauth_tokens_present,
+        _probe_single_server,
+        _save_mcp_server,
+    )
+
+    with _profile_scope(profile):
+        servers = _get_mcp_servers()
+    if name not in servers:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
+
+    cfg = dict(servers[name])
+    if not cfg.get("url"):
+        raise HTTPException(
+            status_code=400,
+            detail="stdio servers authenticate via env keys, not OAuth",
+        )
+    cfg["auth"] = "oauth"
+
+    def _run():
+        from tools.mcp_oauth import force_interactive_oauth
+
+        with _profile_scope(profile), force_interactive_oauth():
+            try:
+                from tools.mcp_oauth_manager import get_manager
+
+                get_manager().remove(name)
+            except Exception:
+                pass  # No cached state to clear — fine.
+            # The default 30s connect timeout would kill the flow while the
+            # user is still looking at the browser consent screen — give the
+            # whole browser round-trip room (the callback itself caps at 300s).
+            tools = _probe_single_server(name, cfg, connect_timeout=240)
+            if not _oauth_tokens_present(name):
+                return {
+                    "ok": False,
+                    "error": (
+                        "The server responded, but no OAuth token was obtained — "
+                        "this provider may require a manually-registered OAuth "
+                        "client (see `hermes mcp login`)."
+                    ),
+                    "tools": [],
+                }
+            _save_mcp_server(name, cfg)
+            return {
+                "ok": True,
+                "tools": [{"name": t, "description": d} for t, d in tools],
+            }
+
+    try:
+        return await asyncio.to_thread(_run)
+    except Exception as exc:
+        msg = str(exc)
+        # Providers that gate RFC 7591 registration to pre-approved clients
+        # (Figma's MCP catalog, etc.) 403 the register call before any
+        # authorization URL exists — surface what's actually happening
+        # instead of a bare "403 Forbidden".
+        lowered = msg.lower()
+        if "403" in msg and ("regist" in lowered or "forbidden" in lowered):
+            msg = (
+                f"'{name}' only allows pre-approved OAuth clients — it rejected "
+                "client registration (403), so no browser flow can start. "
+                "Options: add a pre-registered client to this server's entry "
+                "(oauth: {client_id: ..., client_secret: ...}), or use the "
+                "provider's stdio / API-key server instead."
+            )
+        return {"ok": False, "error": msg, "tools": []}
 
 
 class MCPEnabledToggle(BaseModel):
@@ -11185,12 +11269,31 @@ class SkillToggle(BaseModel):
 async def get_skills(profile: Optional[str] = None):
     from tools.skills_tool import _find_all_skills
     from hermes_cli.skills_config import get_disabled_skills
+    from tools.skill_usage import (
+        _read_bundled_manifest_names,
+        _read_hub_installed_names,
+        activity_count,
+        load_usage,
+    )
     with _profile_scope(profile):
         config = load_config()
         disabled = get_disabled_skills(config)
         skills = _find_all_skills(skip_disabled=True)
+        usage = load_usage()
+        # Set-based provenance (same classification as skill_usage.provenance,
+        # without a per-skill manifest read): hub > bundled > agent, where
+        # "agent" covers agent-authored AND local hand-made skills — the ones
+        # the user may edit/delete from the UI.
+        bundled_names = _read_bundled_manifest_names()
+        hub_names = _read_hub_installed_names()
     for s in skills:
         s["enabled"] = s["name"] not in disabled
+        s["usage"] = activity_count(usage.get(s["name"], {}))
+        s["provenance"] = (
+            "hub" if s["name"] in hub_names
+            else "bundled" if s["name"] in bundled_names
+            else "agent"
+        )
     return skills
 
 
@@ -11908,6 +12011,9 @@ async def get_usage_analytics(days: int = 30, profile: Optional[str] = None):
             "totals": totals,
             "period_days": days,
             "skills": skills,
+            # Per-tool-name call counts (already computed by InsightsEngine);
+            # the desktop Capabilities page aggregates these per toolset.
+            "tools": insights_report.get("tools", []),
         }
     finally:
         db.close()
