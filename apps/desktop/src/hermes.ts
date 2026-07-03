@@ -343,6 +343,7 @@ export function getLogs(params: {
   file?: string
   level?: string
   lines?: number
+  search?: string
 }): Promise<LogsResponse> {
   const query = new URLSearchParams()
 
@@ -360,6 +361,10 @@ export function getLogs(params: {
 
   if (params.component && params.component !== 'all') {
     query.set('component', params.component)
+  }
+
+  if (params.search) {
+    query.set('search', params.search)
   }
 
   const suffix = query.toString()
@@ -589,6 +594,52 @@ export function toggleSkill(name: string, enabled: boolean): Promise<{ ok: boole
     path: '/api/skills/toggle',
     method: 'PUT',
     body: { name, enabled }
+  })
+}
+
+export interface McpTestResult {
+  ok: boolean
+  error?: string
+  tools: { name: string; description: string }[]
+  /** Capability counts (absent on older backends / failed probes). */
+  prompts?: number
+  resources?: number
+}
+
+/** Connect to the server, list its tools, disconnect. Slow (spawns/handshakes
+ *  for real) — well past the 15s default fetch timeout. */
+export function testMcpServer(name: string): Promise<McpTestResult> {
+  return window.hermesDesktop.api<McpTestResult>({
+    ...profileScoped(),
+    path: `/api/mcp/servers/${encodeURIComponent(name)}/test`,
+    method: 'POST',
+    timeoutMs: 60_000
+  })
+}
+
+/** Run the OAuth flow for an HTTP server — opens the system browser and blocks
+ *  until the user finishes (or gives up), hence the very generous timeout. */
+export function authMcpServer(name: string): Promise<McpTestResult> {
+  return window.hermesDesktop.api<McpTestResult>({
+    ...profileScoped(),
+    path: `/api/mcp/servers/${encodeURIComponent(name)}/auth`,
+    method: 'POST',
+    timeoutMs: 300_000
+  })
+}
+
+export interface McpCatalogEntry {
+  name: string
+  description: string
+  url: null | string
+  command: null | string
+}
+
+/** The Nous MCP catalog — used to enrich configured servers with descriptions. */
+export function getMcpCatalog(): Promise<{ entries: McpCatalogEntry[] }> {
+  return window.hermesDesktop.api<{ entries: McpCatalogEntry[] }>({
+    ...profileScoped(),
+    path: '/api/mcp/catalog'
   })
 }
 
