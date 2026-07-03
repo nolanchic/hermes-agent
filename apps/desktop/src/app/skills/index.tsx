@@ -52,6 +52,26 @@ import { $skillsSortDesc, $toolsetsSortDesc } from './store'
 
 const SKILLS_MODES = ['skills', 'toolsets', 'mcp'] as const
 
+// Per-tool call counts come from a 365-day message scan — heavy, and purely
+// cosmetic (Toolsets usage badges). Cache the result module-wide with a TTL so
+// bouncing between tabs/pages doesn't re-run the scan every time. Mirrors the
+// probeCache pattern in mcp-tab. `useRefreshHotkey` still forces a fresh pull.
+const TOOL_CALLS_TTL_MS = 10 * 60 * 1000
+let toolCallsCache: { at: number; value: Record<string, number> } | null = null
+
+async function loadToolCalls(force = false): Promise<Record<string, number>> {
+  if (!force && toolCallsCache && Date.now() - toolCallsCache.at < TOOL_CALLS_TTL_MS) {
+    return toolCallsCache.value
+  }
+
+  const analytics = await getUsageAnalytics(365)
+
+  const value = Object.fromEntries((analytics.tools ?? []).map(e => [e.tool, e.count]))
+  toolCallsCache = { at: Date.now(), value }
+
+  return value
+}
+
 const usageOf = (skill: SkillInfo): number => (typeof skill.usage === 'number' ? skill.usage : 0)
 
 const categoryFor = (skill: SkillInfo): string => asText(skill.category) || 'general'
@@ -164,6 +184,15 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     } catch (err) {
       notifyError(err, t.skills.skillsLoadFailed)
     }
+
+    // An explicit refresh is the one time we bypass the analytics TTL — but
+    // only if the badges are already on screen; otherwise let the lazy load
+    // pick it up when Toolsets is first shown.
+    if (toolCallsCache) {
+      loadToolCalls(true)
+        .then(setToolCalls)
+        .catch(() => setToolCalls({}))
+    }
   }, [t])
 
   const refreshToolsets = useCallback(() => {
@@ -189,8 +218,8 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
 
     let cancelled = false
 
-    getUsageAnalytics(365)
-      .then(a => !cancelled && setToolCalls(Object.fromEntries((a.tools ?? []).map(e => [e.tool, e.count]))))
+    loadToolCalls()
+      .then(value => !cancelled && setToolCalls(value))
       .catch(() => !cancelled && setToolCalls({}))
 
     return () => void (cancelled = true)
