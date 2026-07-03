@@ -8,6 +8,11 @@ import { Tip } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
+// Kept a string (not a shared CSS utility): the `size-5` prefix lets
+// tailwind-merge override <Button size="icon">'s larger built-in size.
+const ICON_BUTTON =
+  'size-5 cursor-pointer rounded-[4px] text-muted-foreground/70 hover:bg-(--ui-control-active-background) hover:text-foreground'
+
 interface JsonDocumentEditorProps {
   apiRef?: RefObject<CodeEditorApi | null>
   className?: string
@@ -54,7 +59,7 @@ export function JsonDocumentEditor({
           <Tip label={t.common.formatJson}>
             <Button
               aria-label={t.common.formatJson}
-              className="icon-button"
+              className={ICON_BUTTON}
               disabled={disabled}
               onClick={() => {
                 const result = editorApi.current?.formatJson()

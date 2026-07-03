@@ -25,22 +25,23 @@ import { Switch } from '@/components/ui/switch'
 import { TextTab } from '@/components/ui/text-tab'
 import {
   authMcpServer,
-  getHermesConfigRecord,
   getLogs,
   getMcpCatalog,
   type HermesGateway,
   type McpCatalogEntry,
   type McpTestResult,
-  saveHermesConfig,
+  saveMcpServers,
   testMcpServer
 } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
+import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import { $activeSessionId } from '@/store/session'
 import type { HermesConfigRecord } from '@/types/hermes'
 
-import { DetailPane, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
+import { setHermesConfigCache, useHermesConfigRecord } from '../hooks/use-config-record'
+import { DetailPane, ICON_BUTTON, MASTER_DETAIL_WIDE_COLS, ToolChip } from '../master-detail'
 import { PanelAddButton, PanelEmpty } from '../overlays/panel'
 import { prettyName } from '../settings/helpers'
 import { useDeepLinkHighlight } from '../settings/use-deep-link-highlight'
@@ -110,6 +111,16 @@ const NEEDS_AUTH_RE = /\b(401|unauthorized|forbidden|invalid[_ ]?token|authentic
 // fleet. Manual refresh / auth / toggle-on bypass the cache.
 const PROBE_TTL_MS = 5 * 60_000
 const probeCache = new Map<string, { at: number; result: McpTestResult }>()
+
+// A probe is only valid for one (profile, exact-config) pair. Keying the cache
+// by a fingerprint of the connection-relevant fields — plus the active profile
+// — means a same-name edit (url/command/env change) or a same-named server in
+// another profile MISSES the cache instead of showing a stale probe.
+const serverFingerprint = (server: Record<string, unknown>): string =>
+  JSON.stringify([server.url, server.command, server.args, server.env, server.headers, server.transport, server.auth])
+
+const probeKey = (name: string, server: Record<string, unknown> | undefined): string =>
+  `${normalizeProfileKey($activeGatewayProfile.get())}::${name}::${serverFingerprint(server ?? {})}`
 
 type Probe = McpTestResult | 'probing'
 
@@ -312,7 +323,20 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
   const { t } = useI18n()
   const m = t.settings.mcp
   const activeSessionId = useStore($activeSessionId)
-  const [config, setConfig] = useState<HermesConfigRecord | null>(null)
+
+  // Shared config cache (see use-config-record): revisiting the tab paints the
+  // cached record instantly; mutations write through `setConfig` and stay
+  // visible to the other settings surfaces.
+  const {
+    data: config,
+    isLoading: configLoading,
+    isError: configFailed,
+    error: configError,
+    refetch: refetchConfig
+  } = useHermesConfigRecord()
+
+  const setConfig = setHermesConfigCache
+
   const [saving, setSaving] = useState(false)
   const [probes, setProbes] = useState<Record<string, Probe>>({})
   const probesRef = useRef(probes)
@@ -349,7 +373,7 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
     }
   }
 
-  const servers = useMemo(() => getServers(config), [config])
+  const servers = useMemo(() => getServers(config ?? null), [config])
 
   // Config/document order, not alphabetical — the list mirrors mcp.json.
   const names = useMemo(() => Object.keys(servers), [servers])
@@ -394,23 +418,36 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
     }
   }
 
+  // Seed the editor draft from config exactly once, the first time it lands.
+  // Background refetches thereafter update the list but must not clobber an
+  // in-progress edit — the draft is the user's until they save or reset.
+  const draftSeeded = useRef(false)
+
   useEffect(() => {
-    let cancelled = false
+    if (config && !draftSeeded.current) {
+      draftSeeded.current = true
+      resetDraft(getServers(config))
+    }
+  }, [config])
 
-    getHermesConfigRecord()
-      .then(next => {
-        if (cancelled) {
-          return
-        }
+  // A profile switch invalidates the config query (see store/profile.ts), which
+  // refetches the new backend's mcp.json. Reset per-profile view state so the
+  // draft reseeds for the new profile and the old profile's probes don't linger
+  // (the probe cache is already profile-keyed, so this just forces a re-probe).
+  const activeProfile = useStore($activeGatewayProfile)
+  const firstProfileRender = useRef(true)
 
-        setConfig(next)
-        resetDraft(getServers(next))
-      })
-      .catch(err => notifyError(err, m.failedLoad))
+  useEffect(() => {
+    if (firstProfileRender.current) {
+      firstProfileRender.current = false
 
-    return () => void (cancelled = true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount; copy is stable
-  }, [])
+      return
+    }
+
+    draftSeeded.current = false
+    setProbes({})
+    setCursor(0)
+  }, [activeProfile])
 
   useDeepLinkHighlight({
     block: 'nearest',
@@ -421,15 +458,16 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
   })
 
   const runProbe = async (serverName: string) => {
+    const key = probeKey(serverName, servers[serverName])
     setProbes(current => ({ ...current, [serverName]: 'probing' }))
 
     try {
       const result = await testMcpServer(serverName)
-      probeCache.set(serverName, { at: Date.now(), result })
+      probeCache.set(key, { at: Date.now(), result })
       setProbes(current => ({ ...current, [serverName]: result }))
     } catch (err) {
       const result = { ok: false, error: err instanceof Error ? err.message : String(err), tools: [] }
-      probeCache.set(serverName, { at: Date.now(), result })
+      probeCache.set(key, { at: Date.now(), result })
       setProbes(current => ({ ...current, [serverName]: result }))
     }
   }
@@ -446,7 +484,10 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
     try {
       const result = await authMcpServer(serverName)
       setProbes(current => ({ ...current, [serverName]: result }))
-      probeCache.set(serverName, { at: Date.now(), result })
+      // Cache under the POST-auth fingerprint (auth: oauth) on success — that's
+      // the config the mount effect will read back, so it hits this entry.
+      const probedConfig = result.ok ? { ...servers[serverName], auth: 'oauth' } : servers[serverName]
+      probeCache.set(probeKey(serverName, probedConfig), { at: Date.now(), result })
 
       if (result.ok) {
         // The endpoint persisted `auth: oauth` — mirror it locally.
@@ -482,7 +523,7 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
         continue
       }
 
-      const cached = probeCache.get(serverName)
+      const cached = probeCache.get(probeKey(serverName, server))
 
       if (cached && Date.now() - cached.at < PROBE_TTL_MS) {
         setProbes(current => ({ ...current, [serverName]: cached.result }))
@@ -490,6 +531,9 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
         void runProbe(serverName)
       }
     }
+    // Re-run only when the server set changes; runProbe is recreated every
+    // render and adding it would re-probe the fleet on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [servers])
 
   // Config writes reach live sessions immediately — no manual "Reload MCP".
@@ -505,10 +549,12 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
     }
   }
 
+  // Whole-map replace (NOT saveHermesConfig, which deep-merges and so can never
+  // delete a server, drop `enabled: false`, or remove a nested field). Only
+  // after the replace lands do we write the cache through + reload live sessions.
   const persist = async (nextServers: McpServers) => {
-    const nextConfig = { ...config, mcp_servers: nextServers }
-    await saveHermesConfig(nextConfig)
-    setConfig(nextConfig)
+    await saveMcpServers(nextServers)
+    setConfig(current => ({ ...current, mcp_servers: nextServers }))
     void silentReload()
   }
 
@@ -616,11 +662,22 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
 
     setSaving(true)
 
+    const prevServers = servers
+
     try {
       await persist(entries)
       resetDraft(entries)
-      // Entries that changed shape get fresh probes.
-      setProbes(current => Object.fromEntries(Object.entries(current).filter(([name]) => name in entries)))
+      // Keep only probes for servers that survived AND kept the same config;
+      // removed OR edited entries drop their probe so the mount effect re-probes
+      // the new shape (the cache also misses on the changed fingerprint).
+      setProbes(current =>
+        Object.fromEntries(
+          Object.entries(current).filter(
+            ([name]) =>
+              name in entries && serverFingerprint(entries[name]) === serverFingerprint(prevServers[name] ?? {})
+          )
+        )
+      )
       notify({ kind: 'success', title: m.savedTitle, message: m.savedMessage('mcp.json') })
     } catch (err) {
       notifyError(err, m.saveFailed)
@@ -629,8 +686,25 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
     }
   }
 
+  // Cached data paints instantly; a spinner only ever shows on the first-ever
+  // load, and a failed load gets a real retry — never a silent blank pane.
+  if (configFailed && !config) {
+    return (
+      <div className="flex h-full min-h-0 flex-1 items-center justify-center p-6">
+        <ErrorBanner className="max-w-sm">
+          <span className="flex flex-col gap-2">
+            {configError instanceof Error ? configError.message : m.failedLoad}
+            <Button className="self-start" onClick={() => void refetchConfig()} size="xs" variant="text">
+              {m.reload}
+            </Button>
+          </span>
+        </ErrorBanner>
+      </div>
+    )
+  }
+
   if (!config) {
-    return null
+    return <PageLoader className="min-h-24" label={configLoading ? m.loading : t.skills.loading} />
   }
 
   // Zero servers and a pristine doc: one centered invitation.
@@ -708,7 +782,6 @@ export function McpTab({ gateway }: { gateway: HermesGateway | null }) {
                     onToggle={checked => void toggleServer(serverName, checked)}
                     status={status}
                     statusText={statusLine(status, probes[serverName])}
-                    url={server.url}
                   />
                 )
               })}
@@ -830,7 +903,7 @@ function ServerConfig({
         <Button
           // TODO(i18n): literal until the UX settles.
           aria-label="All servers"
-          className={cn('mt-3', 'icon-button')}
+          className={cn('mt-3', ICON_BUTTON)}
           onClick={onBack}
           size="icon"
           title="All servers"
@@ -838,7 +911,7 @@ function ServerConfig({
         >
           <Codicon name="chevron-left" size="0.8125rem" />
         </Button>
-        <McpAvatar className="mt-2.5" name={name} status={status} url={entry.url} />
+        <McpAvatar className="mt-2.5" name={name} status={status} />
         <div className="min-w-0 flex-1 pt-1">
           <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold tracking-tight">{prettyName(name)}</h3>
           <p className="mt-0.5 truncate text-[0.68rem] text-(--ui-text-tertiary)">
@@ -890,9 +963,9 @@ function ServerConfig({
 
       {status === 'probing' && <PageLoader className="min-h-24" label={t.skills.loading} />}
 
-      {probe && probe !== 'probing' && !probe.ok && status !== 'off' && (
-        <ErrorBanner className="mt-3">{probe.error}</ErrorBanner>
-      )}
+      {/* No inline error dump — the status dot/line says "Error"/"Needs
+          authentication", and the actual failure lands in the logs pane below
+          (and the console). A big red block here just shouts the same thing. */}
 
       {probe && probe !== 'probing' && probe.ok && probe.tools.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1">
@@ -965,7 +1038,7 @@ function ServerIconActions({
     <span className={cn('flex items-center gap-0.5', className)}>
       <Button
         aria-label={m.reload}
-        className="icon-button"
+        className={ICON_BUTTON}
         disabled={probing}
         onClick={onProbe}
         size="icon"
@@ -976,7 +1049,7 @@ function ServerIconActions({
       </Button>
       <Button
         aria-label={m.remove}
-        className={cn('icon-button', 'hover:text-destructive')}
+        className={cn(ICON_BUTTON, 'hover:text-destructive')}
         disabled={saving}
         onClick={onRemove}
         size="icon"
@@ -1127,39 +1200,13 @@ const brandFor = (name: string) => {
   return MCP_BRAND_ICONS[lower] ?? Object.entries(MCP_BRAND_ICONS).find(([key]) => lower.includes(key))?.[1] ?? null
 }
 
-// Registrable root, not the mcp subdomain — mcp.figma.com has no favicon and
-// Google's service answers with its useless default globe; figma.com has the
-// real mark.
-const faviconDomain = (url: unknown): null | string => {
-  if (typeof url !== 'string') {
-    return null
-  }
-
-  try {
-    return new URL(url).hostname.split('.').slice(-2).join('.')
-  } catch {
-    return null
-  }
-}
-
 // PlatformAvatar (messaging), copied 1:1 — same size, radius, type scale, and
 // brand-tint treatment — plus a status dot overlay. Identity ladder: curated
-// brand glyph → root-domain favicon → letter monogram.
-function McpAvatar({
-  className,
-  name,
-  status,
-  url
-}: {
-  className?: string
-  name: string
-  status: ServerStatus
-  url?: unknown
-}) {
+// brand glyph → letter monogram. We deliberately do NOT fetch remote favicons:
+// a configured MCP URL can be a private/internal host, and hitting Google's
+// favicon service for it would leak that hostname off-box.
+function McpAvatar({ className, name, status }: { className?: string; name: string; status: ServerStatus }) {
   const brand = brandFor(name)
-  const domain = faviconDomain(url)
-  const [faviconFailed, setFaviconFailed] = useState(false)
-  const showFavicon = !brand && domain !== null && !faviconFailed
 
   return (
     <span
@@ -1172,13 +1219,6 @@ function McpAvatar({
     >
       {brand ? (
         <brand.Icon aria-hidden className="size-3.5" style={{ color: brand.color }} />
-      ) : showFavicon ? (
-        <img
-          alt=""
-          className="size-3.5 rounded-[2px] object-contain"
-          onError={() => setFaviconFailed(true)}
-          src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`}
-        />
       ) : (
         name.charAt(0).toUpperCase()
       )}
@@ -1203,8 +1243,7 @@ function McpRow({
   onSelect,
   onToggle,
   status,
-  statusText,
-  url
+  statusText
 }: {
   active: boolean
   busy: boolean
@@ -1216,7 +1255,6 @@ function McpRow({
   onToggle: (checked: boolean) => void
   status: ServerStatus
   statusText: string
-  url?: unknown
 }) {
   return (
     <div
@@ -1231,7 +1269,7 @@ function McpRow({
         onClick={onSelect}
         type="button"
       >
-        <McpAvatar name={name} status={status} url={url} />
+        <McpAvatar name={name} status={status} />
         <span className="min-w-0 flex-1">
           <span
             className={cn(
