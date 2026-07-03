@@ -1,4 +1,5 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { codiconIcon } from '@/components/ui/codicon'
 import { Tip } from '@/components/ui/tooltip'
@@ -12,6 +13,7 @@ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import { OverlayIconButton } from '../overlays/overlay-chrome'
 import { OverlayMain, OverlayNavItem, OverlaySidebar, OverlaySplitLayout } from '../overlays/overlay-split-layout'
 import { OverlayView } from '../overlays/overlay-view'
+import { SKILLS_ROUTE } from '../routes'
 
 import { AboutSettings } from './about-settings'
 import { AppearanceSettings } from './appearance-settings'
@@ -36,6 +38,18 @@ const SETTINGS_VIEWS: readonly SettingsViewId[] = [
 
 export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: SettingsPageProps) {
   const { t } = useI18n()
+  const navigate = useNavigate()
+  const { search } = useLocation()
+
+  // MCP moved out of Settings into Capabilities (/skills?tab=mcp). Keep old
+  // `/settings?tab=mcp` deep links working — `useRouteEnumParam` would silently
+  // coerce the unknown tab to the default view otherwise.
+  useEffect(() => {
+    if (new URLSearchParams(search).get('tab') === 'mcp') {
+      navigate(`${SKILLS_ROUTE}?tab=mcp`, { replace: true })
+    }
+  }, [navigate, search])
+
   const [activeView, setActiveView] = useRouteEnumParam('tab', SETTINGS_VIEWS, 'config:model' as SettingsViewId)
   // Providers subnav (Accounts vs API keys) lives in its own param so each
   // sub-view is deep-linkable and survives a refresh.
