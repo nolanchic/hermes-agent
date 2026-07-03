@@ -51,10 +51,11 @@ import { asText, includesQuery, prettyName, toolNames, toolsetDisplayLabel } fro
 import { ToolsetConfigPanel } from '../settings/toolset-config-panel'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
+import { SkillsHub } from './hub'
 import { McpTab } from './mcp-tab'
 import { $skillsSortDesc, $toolsetsSortDesc } from './store'
 
-const SKILLS_MODES = ['skills', 'toolsets', 'mcp'] as const
+const SKILLS_MODES = ['skills', 'toolsets', 'mcp', 'hub'] as const
 
 // Skills + toolsets live in the RQ cache so switching tabs/pages paints the
 // cached lists instantly (no reload flash) and mount only fires a deduped
@@ -489,15 +490,24 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
       // searching it is noise.
       searchHidden={mode === 'mcp'}
       searchHints={searchHints}
-      searchPlaceholder={mode === 'skills' ? t.skills.searchSkills : t.skills.searchToolsets}
+      searchPlaceholder={
+        mode === 'skills'
+          ? t.skills.searchSkills
+          : mode === 'hub'
+            ? t.skills.hub.searchPlaceholder
+            : t.skills.searchToolsets
+      }
       searchValue={query}
       tabs={[
         { id: 'skills', label: t.skills.tabSkills, meta: skills?.length ?? null },
         { id: 'toolsets', label: t.skills.tabToolsets, meta: toolsets ? visibleToolsetCount(toolsets) : null },
-        { id: 'mcp', label: t.skills.tabMcp }
+        { id: 'mcp', label: t.skills.tabMcp },
+        { id: 'hub', label: t.skills.tabHub }
       ]}
     >
-      {mode === 'mcp' ? (
+      {mode === 'hub' ? (
+        <SkillsHub onInstalledChange={() => void refreshCapabilities()} query={query} />
+      ) : mode === 'mcp' ? (
         <McpTab gateway={gateway} />
       ) : (skillsFailed || toolsetsFailed) && (!skills || !toolsets) ? (
         <PanelEmpty

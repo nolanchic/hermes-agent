@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useState } from 'react'
 
+import { useDebounced } from '@/app/hooks/use-debounced'
 import { PageLoader } from '@/components/page-loader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,11 +21,8 @@ import {
   previewSkillHub,
   scanSkillHub,
   searchSkillsHub,
-  type SkillHubInstalledEntry,
-  type SkillHubPreview,
   type SkillHubResult,
   type SkillHubScanResult,
-  type SkillHubSource,
   updateSkillsFromHub
 } from '@/hermes'
 import { useI18n } from '@/i18n'
@@ -32,6 +31,7 @@ import { upsertDesktopActionTask } from '@/store/activity'
 import { notify, notifyError } from '@/store/notifications'
 
 const ACTION_POLL_MS = 1200
+const SOURCES_KEY = ['skill-hub-sources'] as const
 
 function trustTone(level: string): string {
   switch (level) {
@@ -68,105 +68,44 @@ interface SkillsHubProps {
 export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
   const { t } = useI18n()
   const h = t.skills.hub
+  const queryClient = useQueryClient()
 
-  const [sources, setSources] = useState<SkillHubSource[]>([])
-  const [featured, setFeatured] = useState<SkillHubResult[]>([])
-  const [installed, setInstalled] = useState<Record<string, SkillHubInstalledEntry>>({})
-  const [sourcesLoading, setSourcesLoading] = useState(true)
+  // Sources + featured + the installed map — one cached fetch, revalidated on
+  // mount and re-fetched after an install/update action lands.
+  const sourcesQuery = useQuery({
+    queryKey: SOURCES_KEY,
+    queryFn: getSkillHubSources,
+    staleTime: 5 * 60_000
+  })
 
-  const [results, setResults] = useState<SkillHubResult[]>([])
-  const [searching, setSearching] = useState(false)
-  const [searched, setSearched] = useState(false)
-  const [timedOut, setTimedOut] = useState<string[]>([])
-  const [searchMs, setSearchMs] = useState<null | number>(null)
+  // Debounced hub search, keyed on the settled query so RQ dedupes/caches per
+  // term and cancels stale terms for us (no hand-rolled sequence guard).
+  const term = useDebounced(query.trim(), 350)
+
+  const searchQuery = useQuery({
+    queryKey: ['skill-hub-search', term],
+    queryFn: () => searchSkillsHub(term),
+    enabled: term.length > 0,
+    staleTime: 60_000
+  })
 
   // Live log tail for the most recent install/uninstall/update action.
   const [action, setAction] = useState<null | string>(null)
   const [actionLog, setActionLog] = useState<string[]>([])
   const [actionRunning, setActionRunning] = useState(false)
 
-  // Preview/scan dialog state.
+  // Preview/scan dialog. Preview is cache-worthy (keyed by identifier); scan is
+  // an explicit, on-demand security pass so it stays imperative.
   const [detail, setDetail] = useState<null | SkillHubResult>(null)
-  const [preview, setPreview] = useState<null | SkillHubPreview>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
   const [scan, setScan] = useState<null | SkillHubScanResult>(null)
   const [scanning, setScanning] = useState(false)
 
-  const searchSeq = useRef(0)
-
-  useEffect(() => {
-    let cancelled = false
-
-    getSkillHubSources()
-      .then(response => {
-        if (cancelled) {
-          return
-        }
-
-        setSources(response.sources)
-        setFeatured(response.featured)
-        setInstalled(response.installed)
-      })
-      .catch(err => notifyError(err, h.loadFailed))
-      .finally(() => {
-        if (!cancelled) {
-          setSourcesLoading(false)
-        }
-      })
-
-    return () => void (cancelled = true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
-  }, [])
-
-  // Debounced hub search driven by the shared page search field.
-  useEffect(() => {
-    const trimmed = query.trim()
-
-    if (!trimmed) {
-      setResults([])
-      setSearched(false)
-      setSearching(false)
-      setTimedOut([])
-      setSearchMs(null)
-
-      return
-    }
-
-    const seq = searchSeq.current + 1
-    searchSeq.current = seq
-    setSearching(true)
-
-    const timer = window.setTimeout(() => {
-      const started = performance.now()
-
-      searchSkillsHub(trimmed)
-        .then(response => {
-          if (searchSeq.current !== seq) {
-            return
-          }
-
-          setResults(response.results)
-          setTimedOut(response.timed_out || [])
-          setInstalled(prev => ({ ...prev, ...(response.installed || {}) }))
-          setSearchMs(Math.round(performance.now() - started))
-          setSearched(true)
-        })
-        .catch(err => {
-          if (searchSeq.current === seq) {
-            notifyError(err, h.searchFailed)
-            setResults([])
-            setSearched(true)
-          }
-        })
-        .finally(() => {
-          if (searchSeq.current === seq) {
-            setSearching(false)
-          }
-        })
-    }, 350)
-
-    return () => window.clearTimeout(timer)
-  }, [h, query])
+  const previewQuery = useQuery({
+    queryKey: ['skill-hub-preview', detail?.identifier],
+    queryFn: () => previewSkillHub(detail!.identifier),
+    enabled: detail !== null,
+    staleTime: 5 * 60_000
+  })
 
   // Poll a spawned hub action's log until it exits, then refresh installed state.
   useEffect(() => {
@@ -192,13 +131,7 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
         if (status.running) {
           timer = window.setTimeout(() => void poll(), ACTION_POLL_MS)
         } else {
-          getSkillHubSources()
-            .then(response => {
-              if (!cancelled) {
-                setInstalled(response.installed)
-              }
-            })
-            .catch(() => {})
+          void queryClient.invalidateQueries({ queryKey: SOURCES_KEY })
           onInstalledChange?.()
         }
       } catch {
@@ -217,7 +150,7 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
         window.clearTimeout(timer)
       }
     }
-  }, [action, onInstalledChange])
+  }, [action, onInstalledChange, queryClient])
 
   const install = useCallback(
     async (identifier: string, name: string) => {
@@ -247,20 +180,6 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
     }
   }, [h])
 
-  const openDetail = useCallback(
-    (skill: SkillHubResult) => {
-      setDetail(skill)
-      setPreview(null)
-      setScan(null)
-      setPreviewLoading(true)
-      previewSkillHub(skill.identifier)
-        .then(setPreview)
-        .catch(err => notifyError(err, h.previewFailed))
-        .finally(() => setPreviewLoading(false))
-    },
-    [h]
-  )
-
   const runScan = useCallback(
     (identifier: string) => {
       setScanning(true)
@@ -272,17 +191,32 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
     [h]
   )
 
-  const isInstalled = useCallback((identifier: string) => Boolean(installed[identifier]), [installed])
+  const openDetail = useCallback((skill: SkillHubResult) => {
+    setDetail(skill)
+    setScan(null)
+  }, [])
 
-  const hasInstalled = Object.keys(installed).length > 0
-  const showLanding = !searched && !searching
+  // Installed map: sources seeds it, search results patch it (a term can surface
+  // installs the sources list didn't feature).
+  const installed = { ...(sourcesQuery.data?.installed ?? {}), ...(searchQuery.data?.installed ?? {}) }
+  const isInstalled = (identifier: string) => Boolean(installed[identifier])
+
+  const sources = sourcesQuery.data?.sources ?? []
+  const featured = sourcesQuery.data?.featured ?? []
+  const results = searchQuery.data?.results ?? []
+  const timedOut = searchQuery.data?.timed_out ?? []
+
+  const searching = term.length > 0 && searchQuery.isFetching
+  const searched = term.length > 0 && searchQuery.isSuccess
+  const showLanding = term.length === 0
   const listed = showLanding ? featured : results
+  const hasInstalled = Object.keys(installed).length > 0
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-y-auto p-4 [scrollbar-gutter:stable]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          {sourcesLoading ? (
+          {sourcesQuery.isLoading ? (
             <span>{h.connectingHubs}</span>
           ) : (
             <>
@@ -313,7 +247,7 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
 
       {searched && !searching && (
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span>{h.resultCount(results.length, searchMs)}</span>
+          <span>{h.resultCount(results.length, null)}</span>
           {timedOut.length > 0 && <span className="text-amber-400">{h.timedOut(timedOut.join(', '))}</span>}
         </div>
       )}
@@ -421,19 +355,19 @@ export function SkillsHub({ onInstalledChange, query }: SkillsHubProps) {
                   </div>
                 )}
 
-                {previewLoading ? (
+                {previewQuery.isLoading ? (
                   <PageLoader className="min-h-32" label={h.searching} />
-                ) : preview ? (
+                ) : previewQuery.data ? (
                   <>
                     <pre
                       className="max-h-72 overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-3 font-mono text-[0.68rem] leading-relaxed"
                       data-selectable-text="true"
                     >
-                      {preview.skill_md || h.noReadme}
+                      {previewQuery.data.skill_md || h.noReadme}
                     </pre>
-                    {preview.files.length > 0 && (
+                    {previewQuery.data.files.length > 0 && (
                       <div className="text-xs text-muted-foreground">
-                        <span className="font-medium">{h.files}:</span> {preview.files.join(', ')}
+                        <span className="font-medium">{h.files}:</span> {previewQuery.data.files.join(', ')}
                       </div>
                     )}
                   </>
