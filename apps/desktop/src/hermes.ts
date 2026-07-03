@@ -22,7 +22,6 @@ import type {
   LogsResponse,
   McpCatalogResponse,
   McpServerSummary,
-  McpServerTestResponse,
   MemoryProviderConfig,
   MemoryProviderOAuthStatus,
   MemoryStatusResponse,
@@ -640,21 +639,6 @@ export function authMcpServer(name: string): Promise<McpTestResult> {
   })
 }
 
-export interface McpCatalogEntry {
-  name: string
-  description: string
-  url: null | string
-  command: null | string
-}
-
-/** The Nous MCP catalog — used to enrich configured servers with descriptions. */
-export function getMcpCatalog(): Promise<{ entries: McpCatalogEntry[] }> {
-  return window.hermesDesktop.api<{ entries: McpCatalogEntry[] }>({
-    ...profileScoped(),
-    path: '/api/mcp/catalog'
-  })
-}
-
 export function getToolsets(): Promise<ToolsetInfo[]> {
   return window.hermesDesktop.api<ToolsetInfo[]>({
     ...profileScoped(),
@@ -1093,16 +1077,6 @@ export function listMcpServers(): Promise<{ servers: McpServerSummary[] }> {
   return window.hermesDesktop.api<{ servers: McpServerSummary[] }>({
     ...profileScoped(),
     path: '/api/mcp/servers'
-  })
-}
-
-export function testMcpServer(name: string): Promise<McpServerTestResponse> {
-  return window.hermesDesktop.api<McpServerTestResponse>({
-    ...profileScoped(),
-    path: `/api/mcp/servers/${encodeURIComponent(name)}/test`,
-    method: 'POST',
-    // Connect + list tools can be slow for stdio servers that boot a process.
-    timeoutMs: 60_000
   })
 }
 
