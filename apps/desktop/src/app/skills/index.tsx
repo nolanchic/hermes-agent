@@ -164,17 +164,6 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     } catch (err) {
       notifyError(err, t.skills.skillsLoadFailed)
     }
-
-    // Silent enrichment — the message-scan behind this is slow and optional.
-    // A year-wide window, not the analytics default 30d: skill usage badges
-    // are all-time, and "do I use this capability" is a habit question, not
-    // a billing-period one. (Rarely-called tools like `memory` mostly work
-    // through ambient pipelines; their explicit calls are sparse.)
-    getUsageAnalytics(365)
-      .then(analytics =>
-        setToolCalls(Object.fromEntries((analytics.tools ?? []).map(entry => [entry.tool, entry.count])))
-      )
-      .catch(() => setToolCalls({}))
   }, [t])
 
   const refreshToolsets = useCallback(() => {
@@ -188,6 +177,24 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   useEffect(() => {
     void refreshCapabilities()
   }, [refreshCapabilities])
+
+  // Per-tool call counts feed ONLY the Toolsets tab's usage badges/sort, and
+  // the query behind them is a 365-day message scan — heavy. Fetch it lazily
+  // the first time Toolsets is shown, never on Skills or MCP, so it can't
+  // starve the MCP tab's config load. Absent → toolsets sort A–Z until it lands.
+  useEffect(() => {
+    if (mode !== 'toolsets' || toolCalls !== null) {
+      return
+    }
+
+    let cancelled = false
+
+    getUsageAnalytics(365)
+      .then(a => !cancelled && setToolCalls(Object.fromEntries((a.tools ?? []).map(e => [e.tool, e.count]))))
+      .catch(() => !cancelled && setToolCalls({}))
+
+    return () => void (cancelled = true)
+  }, [mode, toolCalls])
 
   const visibleSkills = useMemo(
     () => (skills ? filteredSkills(skills, query, skillsSortDesc) : []),
