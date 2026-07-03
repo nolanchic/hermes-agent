@@ -617,6 +617,18 @@ export function testMcpServer(name: string): Promise<McpTestResult> {
   })
 }
 
+/** Replace the whole `mcp_servers` map (the mcp.json editor's save). Unlike
+ *  `saveHermesConfig`, this REPLACES rather than deep-merges, so deletes,
+ *  re-enables (dropping `enabled: false`), and removed nested fields persist. */
+export function saveMcpServers(servers: Record<string, Record<string, unknown>>): Promise<{ ok: boolean }> {
+  return window.hermesDesktop.api<{ ok: boolean }>({
+    ...profileScoped(),
+    path: '/api/mcp/servers',
+    method: 'PUT',
+    body: { servers }
+  })
+}
+
 /** Run the OAuth flow for an HTTP server — opens the system browser and blocks
  *  until the user finishes (or gives up), hence the very generous timeout. */
 export function authMcpServer(name: string): Promise<McpTestResult> {

@@ -8805,6 +8805,12 @@ class MCPServerCreate(BaseModel):
     profile: Optional[str] = None
 
 
+class MCPServersReplace(BaseModel):
+    # Whole-map replace (name → raw server config) for the GUI mcp.json editor.
+    servers: Dict[str, Dict[str, Any]] = {}
+    profile: Optional[str] = None
+
+
 def _redact_mcp_env(env: Dict[str, Any]) -> Dict[str, str]:
     """Mask secret-shaped MCP env values for read responses."""
     out: Dict[str, str] = {}
@@ -8888,6 +8894,25 @@ async def add_mcp_server(body: MCPServerCreate, profile: Optional[str] = None):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return _mcp_server_summary(name, server_config)
+
+
+@app.put("/api/mcp/servers")
+async def replace_mcp_servers(body: MCPServersReplace, profile: Optional[str] = None):
+    """Replace the entire ``mcp_servers`` map (the GUI mcp.json editor's save).
+
+    The generic ``/api/config`` endpoint deep-merges maps, so it can never
+    delete a server key, drop an ``enabled: false`` flag, or remove a nested
+    field — edits looked saved but the stale entry survived on disk.  This
+    endpoint sets the whole map so removals actually persist.  Storage stays
+    the config.yaml ``mcp_servers`` key the CLI/TUI already read.
+    """
+    from hermes_cli.mcp_config import _replace_mcp_servers
+
+    with _profile_scope(body.profile or profile):
+        ok, issues = _replace_mcp_servers(body.servers)
+    if not ok:
+        raise HTTPException(status_code=400, detail="; ".join(issues))
+    return {"ok": True}
 
 
 @app.delete("/api/mcp/servers/{name}")
