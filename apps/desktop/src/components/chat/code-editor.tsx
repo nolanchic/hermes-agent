@@ -158,6 +158,14 @@ const LAYOUT_THEME = EditorView.theme({
   }
 })
 
+// Framed = prose editing (SOUL.md, skills, memories): no line-number gutter (it
+// shoved text right and made the left inset dwarf the top), and zero the line's
+// own horizontal padding so the host's uniform `p-2` is the ONLY inset — even
+// breathing room on all four sides. Long lines wrap rather than scroll.
+const FRAMED_THEME = EditorView.theme({
+  '.cm-line': { padding: '0' }
+})
+
 // A deliberately small CodeMirror 6 surface for *spot edits* — not an IDE: line
 // numbers, history, selection, bracket matching, syntax highlighting. No fold
 // gutter, autocomplete, or active-line chrome, so it reads like the preview it
@@ -225,7 +233,8 @@ export function CodeEditor({
     const state = EditorState.create({
       doc: initialValue,
       extensions: [
-        lineNumbers(),
+        // Gutter only outside framed mode — framed prose reads better flush.
+        ...(framed ? [] : [lineNumbers()]),
         history(),
         drawSelection(),
         indentOnInput(),
@@ -264,9 +273,9 @@ export function CodeEditor({
         }),
         LAYOUT_THEME,
         // Standalone edits (SOUL.md, skills, memories) are prose, not code —
-        // wrap long lines instead of scrolling horizontally. Pane previews stay
-        // flush/scrolling so they mirror the SourceView they toggle from.
-        ...(framed ? [EditorView.lineWrapping] : [])
+        // wrap long lines instead of scrolling horizontally, and drop the gutter
+        // inset. Pane previews stay flush/scrolling to mirror their SourceView.
+        ...(framed ? [EditorView.lineWrapping, FRAMED_THEME] : [])
       ]
     })
 
