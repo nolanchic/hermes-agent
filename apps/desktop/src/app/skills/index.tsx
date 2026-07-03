@@ -29,6 +29,7 @@ import { notify, notifyError } from '@/store/notifications'
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import type { SkillInfo, ToolsetInfo } from '@/types/hermes'
 
+import { useOnProfileSwitch } from '../hooks/use-on-profile-switch'
 import { useRefreshHotkey } from '../hooks/use-refresh-hotkey'
 import { useRouteEnumParam } from '../hooks/use-route-enum-param'
 import {
@@ -250,6 +251,12 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     return () => void (cancelled = true)
   }, [mode, toolCalls])
 
+  // On a profile switch the analytics cache is profile-keyed, but our local
+  // toolCalls state isn't — leaving it non-null would keep the lazy effect from
+  // ever re-running, so badges/sort would show the previous profile's counts.
+  // Reset to null so the next Toolsets view reloads for the active profile.
+  useOnProfileSwitch(() => setToolCalls(null))
+
   const visibleSkills = useMemo(
     () => (skills ? filteredSkills(skills, query, skillsSortDesc) : []),
     [query, skills, skillsSortDesc]
@@ -259,6 +266,12 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     () => (toolsets ? filteredToolsets(toolsets, query, toolCalls ?? {}, toolsetsSortDesc) : []),
     [query, toolCalls, toolsets, toolsetsSortDesc]
   )
+
+  // Bulk actions ("All" master switch, "Disable unused") and the master-switch
+  // state target the WHOLE tab, never the search-filtered view — a tab-wide
+  // control that silently scoped to the current query would be a lie.
+  const bulkSkills = skills ?? []
+  const bulkToolsets = useMemo(() => (toolsets ?? []).filter(ts => isDesktopToolsetVisible(ts.name)), [toolsets])
 
   // Rotating placeholder nudges from the user's own data — teach that search
   // understands categories and tool names, not just titles.
@@ -369,13 +382,13 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   const bulkToggle = (enabled: boolean) =>
     mode === 'skills'
       ? bulkApply(
-          visibleSkills.filter(row => row.enabled !== enabled),
+          bulkSkills.filter(row => row.enabled !== enabled),
           [],
           enabled
         )
       : bulkApply(
           [],
-          visibleToolsets.filter(row => row.enabled !== enabled),
+          bulkToolsets.filter(row => row.enabled !== enabled),
           enabled
         )
 
@@ -383,7 +396,7 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
   // install: keep the workhorses, shed the noise.
   const disableUnused = () =>
     bulkApply(
-      visibleSkills.filter(skill => skill.enabled && usageOf(skill) === 0),
+      bulkSkills.filter(skill => skill.enabled && usageOf(skill) === 0),
       [],
       false
     )
@@ -397,8 +410,8 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
     onToggle: checked => void bulkToggle(checked)
   })
 
-  const allSkillsEnabled = visibleSkills.length > 0 && visibleSkills.every(s => s.enabled)
-  const allToolsetsEnabled = visibleToolsets.length > 0 && visibleToolsets.every(ts => ts.enabled)
+  const allSkillsEnabled = bulkSkills.length > 0 && bulkSkills.every(s => s.enabled)
+  const allToolsetsEnabled = bulkToolsets.length > 0 && bulkToolsets.every(ts => ts.enabled)
 
   // TODO(i18n): literals until the UX settles.
   const sortButton = (desc: boolean, flip: () => void) => (
