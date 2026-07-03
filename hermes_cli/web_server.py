@@ -8939,17 +8939,17 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
     details: Dict[str, Any] = {}
 
     def _probe_scoped():
-        # Re-enter the scope INSIDE the worker thread so call-time
-        # resolution during the probe — env-placeholder expansion in
-        # _resolve_mcp_server_config reading the profile's .env — sees the
-        # selected profile, matching the config the server was saved into.
-        # (asyncio.to_thread copies contextvars, but entering explicitly
-        # keeps the lock-protected SKILLS_DIR swap balanced per-thread.)
-        # The probe's dedicated MCP event-loop thread is covered too:
-        # _run_on_mcp_loop wraps scheduled coroutines with the caller's
-        # HERMES_HOME override (see mcp_tool._wrap_with_home_override), so
-        # OAuth token stores resolve against the selected profile as well.
-        with _profile_scope(profile):
+        # Home-only scope (contextvar), NOT _profile_scope. A probe blocks for
+        # as long as the server takes to spawn/connect — a stdio `npx` cold
+        # start is many seconds — and _profile_scope holds a process-global
+        # skills lock for its ENTIRE body. Holding that across the probe
+        # serialized every other endpoint (config/skills/toolsets all take the
+        # same lock), so a slow server made unrelated requests time out at 15s.
+        # The probe touches no skills globals; it only needs the HERMES_HOME
+        # override for .env interpolation + OAuth token resolution, which the
+        # contextvar provides (copied into this to_thread worker; and
+        # _run_on_mcp_loop re-wraps it onto the MCP event-loop thread).
+        with _config_profile_scope(profile):
             return _probe_single_server(name, servers[name], details=details)
 
     try:
@@ -8998,12 +8998,24 @@ async def auth_mcp_server(name: str, profile: Optional[str] = None):
             status_code=400,
             detail="stdio servers authenticate via env keys, not OAuth",
         )
+    # A server carrying `headers` uses API-key/bearer auth; a 401 there is a bad
+    # key, not an OAuth prompt. Refuse rather than rewrite it to `auth: oauth`
+    # and corrupt a working header-auth config. (Explicit `auth: oauth` is fine.)
+    if cfg.get("headers") and cfg.get("auth") != "oauth":
+        raise HTTPException(
+            status_code=400,
+            detail="This server uses header/API-key auth, not OAuth — check its key.",
+        )
     cfg["auth"] = "oauth"
 
     def _run():
         from tools.mcp_oauth import force_interactive_oauth
 
-        with _profile_scope(profile), force_interactive_oauth():
+        # Home-only scope, not _profile_scope: this blocks on the browser flow
+        # for up to minutes; holding the shared skills lock that whole time
+        # would freeze every other endpoint. Config writes here (_save_mcp_server)
+        # resolve HERMES_HOME via the contextvar override, which is all they need.
+        with _config_profile_scope(profile), force_interactive_oauth():
             try:
                 from tools.mcp_oauth_manager import get_manager
 
