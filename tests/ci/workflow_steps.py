@@ -80,6 +80,7 @@ def _run(step: dict, ctx: dict, cwd: Path | None = None, *, receipt: bool = Fals
             [bash, "--noprofile", "--norc", "-eo", "pipefail", str(script)],
             cwd=cwd or root, env=env, stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=30,
+            check=False,
         )
         # workflow_steps is not a test module, so pytest does not rewrite this assert: the
         # message is all a CI failure shows. A child that dies without a word (a Windows
